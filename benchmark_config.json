@@ -1,0 +1,48 @@
+{
+  "output": {
+    "file": "benchmark_results.txt",
+    "format": "table"
+  },
+  "plot": {
+    "enabled": true,
+    "output": "benchmark_plot.jpg",
+    "title": "Сравнение производительности Tarantool",
+    "figure_size": [12, 8],
+    "dpi": 300
+  },
+  "benchmark": {
+    "benchmark_file": "init.lua",
+    "arguments": {
+      "index_count": 3,
+      "fiber_count": {"start": 1, "end": 10, "points": 10},
+      "REPLACE_PER_TXN_COUNT": 1,
+      "divisor": 3
+    },
+    "argument_order": ["index_count", "fiber_count", "REPLACE_PER_TXN_COUNT", "divisor"],
+    "test_iters": 10,
+    "timeout": 60
+  },
+  "build_mode": "release",
+  "versions": [
+    {
+      "branch": "master",
+      "name": "current master",
+      "benchmark_config": {}
+    },
+    {
+      "branch": "gh-11927-mvcc-false-positive-rollbacks-of-identical-replaces-hashmap-in-each-story",
+      "name": "hashmap in each story",
+      "benchmark_config": {}
+    },
+    {
+      "branch": "gh-11927-mvcc-false-positive-rollbacks-of-identical-replaces-rb-tree-in-each-story",
+      "name": "rb tree in each story",
+      "benchmark_config": {}
+    },
+    {
+      "branch": "gh-11927-mvcc-false-positive-rollbacks-of-identical-replaces",
+      "name": "hashmap in tx manager",
+      "benchmark_config": {}
+    }
+  ]
+}
