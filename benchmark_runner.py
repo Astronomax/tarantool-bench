@@ -10,7 +10,8 @@ Config file format:
     {
         "output": {
             "file": "benchmark_results.txt",
-            "format": "csv"  // "csv" or "table"
+            "format": "csv",  // "csv" or "table"
+            "percentage_baseline": "master"  // Optional: branch name to calculate percentages relative to
         },
         "plot": {
             "enabled": true,  // Optional: enable plotting
@@ -86,18 +87,25 @@ def update_submodules(tarantool_path: str) -> None:
     run_command(['git', 'submodule', 'update', '--init', '--recursive'], cwd=tarantool_path)
 
 
-def build_tarantool(tarantool_path: str, build_mode: str = "release") -> None:
+def build_tarantool(tarantool_path: str, build_mode: str, branch_name: str) -> str:
     """
-    Build Tarantool in the release-build or debug-build directory.
+    Build Tarantool in a build directory specific to the branch.
     
     Args:
         tarantool_path: Path to Tarantool repository
         build_mode: "release" or "debug"
+        branch_name: Name of the branch (used in build directory name)
+    
+    Returns:
+        The build directory name
     """
     if build_mode not in ["release", "debug"]:
         raise ValueError(f"Invalid build_mode: {build_mode}. Must be 'release' or 'debug'")
     
-    build_dir_name = f"{build_mode}-build"
+    # Sanitize branch name for use in directory name (replace / with _)
+    sanitized_branch = branch_name.replace('/', '_').replace('\\', '_')
+    build_dir_name = f"{build_mode}-build-{sanitized_branch}"
+    
     build_path = os.path.join(tarantool_path, build_dir_name)
     
     # Create build directory if it doesn't exist
@@ -123,6 +131,8 @@ def build_tarantool(tarantool_path: str, build_mode: str = "release") -> None:
     tarantool_binary = os.path.join(build_path, 'src', 'tarantool')
     if not os.path.exists(tarantool_binary):
         raise FileNotFoundError(f"Tarantool binary not found at {tarantool_binary}")
+    
+    return build_dir_name
 
 
 def run_tarantool_benchmark(
@@ -338,10 +348,9 @@ def process_version(
     update_submodules(tarantool_path)
     
     # Build Tarantool
-    build_tarantool(tarantool_path, build_mode)
+    build_dir_name = build_tarantool(tarantool_path, build_mode, branch)
     
     # Get tarantool binary path
-    build_dir_name = f"{build_mode}-build"
     tarantool_binary = os.path.join(tarantool_path, build_dir_name, 'src', 'tarantool')
     
     # Resolve benchmark file path (relative to work_dir or absolute)
@@ -370,9 +379,30 @@ def process_version(
     return results, version_name, argument_order
 
 
+def find_baseline_results(
+    results: List[Tuple[List[Tuple[Dict[str, int], float]], str, List[str]]],
+    baseline_name: str
+) -> Optional[Dict[Tuple, float]]:
+    """
+    Find baseline results by version name.
+    Returns a dict mapping (argument_values_tuple) -> time, or None if not found.
+    """
+    for version_results, version_name, _ in results:
+        if version_name == baseline_name:
+            baseline_dict = {}
+            for arg_values, time in version_results:
+                # Create a tuple key from argument values (sorted by argument order)
+                _, _, argument_order = results[0]
+                key = tuple(arg_values[arg_name] for arg_name in argument_order)
+                baseline_dict[key] = time
+            return baseline_dict
+    return None
+
+
 def write_results_csv(
     results: List[Tuple[List[Tuple[Dict[str, int], float]], str, List[str]]],
-    output_file: str
+    output_file: str,
+    baseline_name: Optional[str] = None
 ) -> None:
     """Write results in CSV format."""
     print(f"\n{'='*60}")
@@ -386,9 +416,22 @@ def write_results_csv(
     # Get argument order from first result (all should have the same order)
     _, _, argument_order = results[0]
     
+    # Find baseline results if specified
+    baseline_results = None
+    if baseline_name:
+        baseline_results = find_baseline_results(results, baseline_name)
+        if baseline_results is None:
+            print(f"Warning: Baseline branch '{baseline_name}' not found in results. Percentages will not be calculated.")
+            baseline_name = None
+        else:
+            print(f"Using '{baseline_name}' as baseline for percentage calculations")
+    
     with open(output_file, 'w') as f:
         # Write header
-        header = "version," + ",".join(argument_order) + ",time_per_iteration_seconds\n"
+        header = "version," + ",".join(argument_order) + ",time_per_iteration_seconds"
+        if baseline_name:
+            header += ",percentage_vs_baseline"
+        header += "\n"
         f.write(header)
         
         # Write data for each version
@@ -399,7 +442,19 @@ def write_results_csv(
             
             for arg_values, time in version_results:
                 arg_values_str = ",".join([str(arg_values[arg_name]) for arg_name in argument_order])
-                f.write(f"{version_name},{arg_values_str},{time}\n")
+                line = f"{version_name},{arg_values_str},{time}"
+                
+                # Calculate percentage if baseline is available
+                if baseline_name and baseline_results:
+                    key = tuple(arg_values[arg_name] for arg_name in argument_order)
+                    baseline_time = baseline_results.get(key)
+                    if baseline_time is not None and baseline_time != 0:
+                        percentage = ((time - baseline_time) / baseline_time) * 100
+                        line += f",{percentage:.2f}%"
+                    else:
+                        line += ",N/A"
+                
+                f.write(line + "\n")
             
             print(f"Wrote data for {version_name} ({len(version_results)} combinations)")
     
@@ -408,7 +463,8 @@ def write_results_csv(
 
 def write_results_table(
     results: List[Tuple[List[Tuple[Dict[str, int], float]], str, List[str]]],
-    output_file: str
+    output_file: str,
+    baseline_name: Optional[str] = None
 ) -> None:
     """Write results in table format."""
     print(f"\n{'='*60}")
@@ -422,9 +478,21 @@ def write_results_table(
     # Get argument order from first result (all should have the same order)
     _, _, argument_order = results[0]
     
+    # Find baseline results if specified
+    baseline_results = None
+    if baseline_name:
+        baseline_results = find_baseline_results(results, baseline_name)
+        if baseline_results is None:
+            print(f"Warning: Baseline branch '{baseline_name}' not found in results. Percentages will not be calculated.")
+            baseline_name = None
+        else:
+            print(f"Using '{baseline_name}' as baseline for percentage calculations")
+    
     # Calculate column widths based on header names and data
     time_col_header = "Time per Iteration (s)"
     time_col_width = max(len(time_col_header), 25)
+    pct_col_header = "Percentage vs Baseline"
+    pct_col_width = len(pct_col_header) + 2 if baseline_name else 0
     
     # Calculate width for each argument column
     col_widths = {}
@@ -438,15 +506,25 @@ def write_results_table(
             for arg_name in argument_order:
                 value_str = str(arg_values[arg_name])
                 col_widths[arg_name] = max(col_widths[arg_name], len(value_str))
+            # Check percentage string length if baseline is used
+            if baseline_name and baseline_results:
+                key = tuple(arg_values[arg_name] for arg_name in argument_order)
+                baseline_time = baseline_results.get(key)
+                if baseline_time is not None and baseline_time != 0:
+                    percentage = ((time - baseline_time) / baseline_time) * 100
+                    pct_str = f"{percentage:.2f}%"
+                    pct_col_width = max(pct_col_width, len(pct_str) + 2)
     
     # Add some padding (minimum 2 spaces between columns)
     min_col_width = 12
     for arg_name in argument_order:
         col_widths[arg_name] = max(col_widths[arg_name] + 2, min_col_width)
     time_col_width = max(time_col_width + 2, 25)
+    if baseline_name:
+        pct_col_width = max(pct_col_width, len(pct_col_header) + 2)
     
     # Calculate total width
-    total_width = sum(col_widths.values()) + time_col_width
+    total_width = sum(col_widths.values()) + time_col_width + pct_col_width
     
     with open(output_file, 'w') as f:
         # Write header
@@ -466,6 +544,8 @@ def write_results_table(
             # Write column headers
             header_parts = [f"{arg_name:<{col_widths[arg_name]}}" for arg_name in argument_order]
             header_parts.append(f"{time_col_header:<{time_col_width}}")
+            if baseline_name:
+                header_parts.append(f"{pct_col_header:<{pct_col_width}}")
             f.write("".join(header_parts) + "\n")
             f.write("-" * total_width + "\n")
             
@@ -473,6 +553,17 @@ def write_results_table(
             for arg_values, time in version_results:
                 row_parts = [f"{arg_values[arg_name]:<{col_widths[arg_name]}}" for arg_name in argument_order]
                 row_parts.append(f"{time:<{time_col_width}.6f}")
+                
+                # Add percentage if baseline is available
+                if baseline_name and baseline_results:
+                    key = tuple(arg_values[arg_name] for arg_name in argument_order)
+                    baseline_time = baseline_results.get(key)
+                    if baseline_time is not None and baseline_time != 0:
+                        percentage = ((time - baseline_time) / baseline_time) * 100
+                        row_parts.append(f"{percentage:>+.2f}%".rjust(pct_col_width))
+                    else:
+                        row_parts.append(f"{'N/A':<{pct_col_width}}")
+                
                 f.write("".join(row_parts) + "\n")
             
             f.write("\n")
@@ -490,11 +581,12 @@ def write_results(
 ) -> None:
     """Write results to text file in the specified format."""
     output_format = output_config.get('format', 'csv').lower()
+    baseline_name = output_config.get('percentage_baseline')
     
     if output_format == 'csv':
-        write_results_csv(results, output_file)
+        write_results_csv(results, output_file, baseline_name)
     elif output_format == 'table':
-        write_results_table(results, output_file)
+        write_results_table(results, output_file, baseline_name)
     else:
         raise ValueError(f"Unknown output format: {output_format}. Must be 'csv' or 'table'")
 

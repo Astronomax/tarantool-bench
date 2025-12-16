@@ -1,7 +1,8 @@
 {
   "output": {
     "file": "benchmark_results.txt",
-    "format": "table"
+    "format": "table",
+    "percentage_baseline": "current master"
   },
   "plot": {
     "enabled": true,
@@ -14,7 +15,7 @@
     "benchmark_file": "init.lua",
     "arguments": {
       "index_count": 3,
-      "fiber_count": {"start": 1, "end": 10, "points": 10},
+      "fiber_count": {"start": 1, "end": 10, "points": 2},
       "REPLACE_PER_TXN_COUNT": 1,
       "divisor": 3
     },
